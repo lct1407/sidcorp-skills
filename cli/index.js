@@ -24,7 +24,7 @@ const INSTALLED_MANIFEST = '.skill-manifest.json';
 
 // Default skill repositories
 const DEFAULT_REPOS = [
-  { id: 'sidcorp/sidcorp-skills', name: 'Sidcorp Skills', description: 'Official skills collection' }
+  { id: 'lct1407/sidcorp-skills', name: 'Sidcorp Skills', description: 'Official skills collection' }
 ];
 
 async function main() {
