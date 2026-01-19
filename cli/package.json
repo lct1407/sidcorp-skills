@@ -1,0 +1,24 @@
+{
+  "name": "add-skill",
+  "version": "1.0.0",
+  "description": "CLI to install AI agent skills from GitHub repositories",
+  "main": "index.js",
+  "bin": {
+    "add-skill": "./index.js"
+  },
+  "keywords": [
+    "cli",
+    "ai",
+    "agent",
+    "skills",
+    "claude",
+    "antigraphity"
+  ],
+  "author": "sidcorp",
+  "license": "MIT",
+  "dependencies": {
+    "fs-extra": "^11.2.0",
+    "prompts": "^2.4.2",
+    "tar": "^7.4.0"
+  }
+}

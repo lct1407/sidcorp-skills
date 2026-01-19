@@ -1,0 +1,25 @@
+{
+  "name": "sidcorp-skills",
+  "version": "1.0.0",
+  "description": "Collection of AI agent skills",
+  "skills": [
+    {
+      "id": "code-review",
+      "name": "Code Review",
+      "description": "Code review practices emphasizing technical rigor, evidence-based claims, verification gates, and subagent-driven review workflows",
+      "path": "skills/code-review"
+    },
+    {
+      "id": "python-backend-development",
+      "name": "Python Backend Development",
+      "description": "FastAPI code generation following layered architecture: models, schemas, repositories, services, controllers, migrations, auth, and tests",
+      "path": "skills/python-backend-development"
+    },
+    {
+      "id": "python-async-workers",
+      "name": "Python Async Workers",
+      "description": "Background workers, cron jobs (APScheduler), Celery tasks, and message queue consumers for FastAPI applications",
+      "path": "skills/python-async-workers"
+    }
+  ]
+}
