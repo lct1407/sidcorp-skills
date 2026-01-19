@@ -488,9 +488,8 @@ async function installItems_(items, agents, claudeTargets, repoPath, manifest, c
           const target = CLAUDE_TARGETS.find(t => t.id === targetId);
           const destPath = path.join(cwd, agent.folder, target.folder, item.id);
 
-          await fs.remove(destPath);
           await fs.ensureDir(path.dirname(destPath));
-          await fs.copy(sourcePath, destPath);
+          await fs.copy(sourcePath, destPath, { overwrite: true });
 
           installed.push({
             type: item.type,
@@ -506,9 +505,8 @@ async function installItems_(items, agents, claudeTargets, repoPath, manifest, c
         // For other agents, install to skills folder
         const destPath = path.join(cwd, agent.folder, 'skills', item.id);
 
-        await fs.remove(destPath);
         await fs.ensureDir(path.dirname(destPath));
-        await fs.copy(sourcePath, destPath);
+        await fs.copy(sourcePath, destPath, { overwrite: true });
 
         installed.push({
           type: item.type,
