@@ -5,7 +5,16 @@
       "Bash(npm link:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(node:*)",
+      "Bash(npm config:*)",
+      "Bash(\"/c/Program Files/nodejs/npm\" install)",
+      "Bash(cmd.exe /c \"cd /d d:\\\\Sources\\\\sidcorp-skills\\\\cli && npm install\")",
+      "Bash(cmd.exe /c \"cd /d d:\\\\Sources\\\\sidcorp-skills\\\\cli && dir\")",
+      "Bash(powershell -Command \"cd d:\\\\Sources\\\\sidcorp-skills\\\\cli; npm install; dir\")",
+      "Bash(git restore:*)"
     ]
   }
 }

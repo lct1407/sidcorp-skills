@@ -13,13 +13,32 @@ const AGENTS = [
   { id: 'antigraphity', name: 'Antigraphity', folder: '.agent' }
 ];
 
+// Claude-specific install targets
+const CLAUDE_TARGETS = [
+  { id: 'skills', name: 'Skills', folder: 'skills' },
+  { id: 'subagents', name: 'Subagents', folder: 'subagents' },
+  { id: 'commands', name: 'Commands', folder: 'commands' }
+];
+
+const INSTALLED_MANIFEST = '.skill-manifest.json';
+
 async function main() {
   const args = process.argv.slice(2);
 
+  // Handle --update flag
+  if (args.includes('--update') || args.includes('-u')) {
+    await updateInstalledSkills();
+    return;
+  }
+
+  // Handle --list flag
+  if (args.includes('--list') || args.includes('-l')) {
+    await listInstalledSkills();
+    return;
+  }
+
   if (args.length === 0) {
-    console.log('Usage: add-skill <owner/repo> [--ref <branch|tag>]');
-    console.log('Example: add-skill sidcorp/sidcorp-skills');
-    console.log('         add-skill sidcorp/sidcorp-skills --ref develop');
+    printUsage();
     process.exit(1);
   }
 
@@ -62,105 +81,48 @@ async function main() {
 
     const manifest = await fs.readJson(manifestPath);
 
-    if (!manifest.skills || manifest.skills.length === 0) {
-      console.error('No skills found in manifest.json');
-      process.exit(1);
-    }
-
-    // Step 1: Select skills
-    const skillChoices = manifest.skills.map(skill => ({
-      title: `${skill.name} - ${skill.description}`,
-      value: skill.id
-    }));
-
-    const skillsResponse = await prompts({
-      type: 'multiselect',
-      name: 'selectedSkills',
-      message: 'Select skills to install',
-      choices: skillChoices,
-      min: 1,
-      hint: '- Space to select, Enter to confirm'
-    });
-
-    if (!skillsResponse.selectedSkills || skillsResponse.selectedSkills.length === 0) {
-      console.log('No skills selected. Exiting.');
+    // Step 1: Select items to install
+    const installItems = await selectItemsToInstall(manifest);
+    if (installItems.length === 0) {
+      console.log('Nothing selected. Exiting.');
       process.exit(0);
     }
 
     // Step 2: Detect and select agents
     const cwd = process.cwd();
-    const detectedAgents = [];
-
-    for (const agent of AGENTS) {
-      const agentPath = path.join(cwd, agent.folder);
-      if (await fs.pathExists(agentPath)) {
-        detectedAgents.push(agent.id);
-      }
-    }
-
-    const agentChoices = AGENTS.map(agent => ({
-      title: `${agent.name} (${agent.folder})`,
-      value: agent.id,
-      selected: detectedAgents.includes(agent.id) || detectedAgents.length === 0
-    }));
-
-    const agentsResponse = await prompts({
-      type: 'multiselect',
-      name: 'selectedAgents',
-      message: 'Select target agents',
-      choices: agentChoices,
-      min: 1,
-      hint: detectedAgents.length > 0
-        ? `- Detected: ${detectedAgents.join(', ')}`
-        : '- No agents detected, select manually'
-    });
-
-    if (!agentsResponse.selectedAgents || agentsResponse.selectedAgents.length === 0) {
+    const selectedAgents = await selectAgents(cwd);
+    if (selectedAgents.length === 0) {
       console.log('No agents selected. Exiting.');
       process.exit(0);
     }
 
-    // Step 3: Install skills
-    const installed = [];
-
-    for (const skillId of skillsResponse.selectedSkills) {
-      const skill = manifest.skills.find(s => s.id === skillId);
-      const skillSourcePath = path.join(repoPath, skill.path);
-
-      if (!await fs.pathExists(skillSourcePath)) {
-        console.warn(`⚠️  Skill path not found: ${skill.path}`);
-        continue;
-      }
-
-      for (const agentId of agentsResponse.selectedAgents) {
-        const agent = AGENTS.find(a => a.id === agentId);
-        const destPath = path.join(cwd, agent.folder, 'skills', skillId);
-
-        // Remove existing and copy fresh
-        await fs.remove(destPath);
-        await fs.ensureDir(path.dirname(destPath));
-        await fs.copy(skillSourcePath, destPath);
-
-        installed.push({
-          skill: skill.name,
-          agent: agent.name,
-          path: destPath
-        });
-      }
+    // Step 3: For Claude agent, ask about targets (skills/subagents/commands)
+    let claudeTargets = ['skills']; // default
+    if (selectedAgents.includes('claude')) {
+      claudeTargets = await selectClaudeTargets(installItems);
     }
 
-    // Step 4: Print summary
-    console.log('\n✅ Installation Summary\n');
-    console.log('─'.repeat(60));
+    // Step 4: Install items
+    const installed = await installItems_(
+      installItems,
+      selectedAgents,
+      claudeTargets,
+      repoPath,
+      manifest,
+      cwd
+    );
 
-    for (const item of installed) {
-      const relativePath = path.relative(cwd, item.path);
-      console.log(`  ${item.skill} → ${item.agent}`);
-      console.log(`    📁 ${relativePath}`);
-    }
+    // Step 5: Save installation manifest for updates
+    await saveInstalledManifest(cwd, {
+      source: `${owner}/${repo}`,
+      ref,
+      version: manifest.version,
+      installedAt: new Date().toISOString(),
+      items: installed
+    });
 
-    console.log('─'.repeat(60));
-    console.log(`\n🎉 Installed ${installed.length} skill(s) successfully!\n`);
+    // Step 6: Print summary
+    printSummary(installed, cwd);
 
   } catch (error) {
     console.error('Error:', error.message);
@@ -169,6 +131,390 @@ async function main() {
     // Cleanup temp directory
     await fs.remove(tempDir).catch(() => {});
   }
+}
+
+function printUsage() {
+  console.log(`
+Usage: add-skill <owner/repo> [options]
+
+Commands:
+  add-skill <owner/repo>     Install skills from GitHub repository
+  add-skill --update, -u     Update all installed skills to latest version
+  add-skill --list, -l       List installed skills
+
+Options:
+  --ref <branch|tag>         Use specific branch or tag (default: main)
+
+Examples:
+  add-skill sidcorp/sidcorp-skills
+  add-skill sidcorp/sidcorp-skills --ref develop
+  add-skill --update
+  add-skill --list
+`);
+}
+
+async function selectItemsToInstall(manifest) {
+  const allItems = [];
+
+  // Add skills
+  if (manifest.skills?.length > 0) {
+    manifest.skills.forEach(skill => {
+      allItems.push({
+        type: 'skill',
+        ...skill,
+        title: `[Skill] ${skill.name} - ${skill.description}`
+      });
+    });
+  }
+
+  // Add subagents
+  if (manifest.subagents?.length > 0) {
+    manifest.subagents.forEach(subagent => {
+      allItems.push({
+        type: 'subagent',
+        ...subagent,
+        title: `[Subagent] ${subagent.name} - ${subagent.description}`
+      });
+    });
+  }
+
+  // Add commands
+  if (manifest.commands?.length > 0) {
+    manifest.commands.forEach(command => {
+      allItems.push({
+        type: 'command',
+        ...command,
+        title: `[Command] ${command.name} - ${command.description}`
+      });
+    });
+  }
+
+  if (allItems.length === 0) {
+    console.error('No installable items found in manifest.json');
+    process.exit(1);
+  }
+
+  const choices = allItems.map(item => ({
+    title: item.title,
+    value: item
+  }));
+
+  const response = await prompts({
+    type: 'multiselect',
+    name: 'selected',
+    message: 'Select items to install',
+    choices,
+    min: 1,
+    hint: '- Space to select, Enter to confirm'
+  });
+
+  return response.selected || [];
+}
+
+async function selectAgents(cwd) {
+  const detectedAgents = [];
+
+  for (const agent of AGENTS) {
+    const agentPath = path.join(cwd, agent.folder);
+    if (await fs.pathExists(agentPath)) {
+      detectedAgents.push(agent.id);
+    }
+  }
+
+  const agentChoices = AGENTS.map(agent => ({
+    title: `${agent.name} (${agent.folder})`,
+    value: agent.id,
+    selected: detectedAgents.includes(agent.id) || detectedAgents.length === 0
+  }));
+
+  const response = await prompts({
+    type: 'multiselect',
+    name: 'selectedAgents',
+    message: 'Select target agents',
+    choices: agentChoices,
+    min: 1,
+    hint: detectedAgents.length > 0
+      ? `- Detected: ${detectedAgents.join(', ')}`
+      : '- No agents detected, select manually'
+  });
+
+  return response.selectedAgents || [];
+}
+
+async function selectClaudeTargets(installItems) {
+  // Check what types of items are being installed
+  const hasSkills = installItems.some(i => i.type === 'skill');
+  const hasSubagents = installItems.some(i => i.type === 'subagent');
+  const hasCommands = installItems.some(i => i.type === 'command');
+
+  // If only one type, no need to ask
+  const types = [hasSkills, hasSubagents, hasCommands].filter(Boolean);
+  if (types.length <= 1) {
+    if (hasSkills) return ['skills'];
+    if (hasSubagents) return ['subagents'];
+    if (hasCommands) return ['commands'];
+    return ['skills'];
+  }
+
+  // For skills, ask where to install in Claude
+  if (hasSkills) {
+    const response = await prompts({
+      type: 'multiselect',
+      name: 'targets',
+      message: 'Where to install skills for Claude?',
+      choices: CLAUDE_TARGETS.map(t => ({
+        title: `${t.name} (.claude/${t.folder}/)`,
+        value: t.id,
+        selected: t.id === 'skills'
+      })),
+      min: 1,
+      hint: '- Skills can also be installed as subagents or commands'
+    });
+
+    return response.targets || ['skills'];
+  }
+
+  return ['skills'];
+}
+
+async function installItems_(items, agents, claudeTargets, repoPath, manifest, cwd) {
+  const installed = [];
+
+  for (const item of items) {
+    const sourcePath = path.join(repoPath, item.path);
+
+    if (!await fs.pathExists(sourcePath)) {
+      console.warn(`⚠️  Path not found: ${item.path}`);
+      continue;
+    }
+
+    for (const agentId of agents) {
+      const agent = AGENTS.find(a => a.id === agentId);
+
+      if (agentId === 'claude') {
+        // For Claude, install to selected targets
+        const targets = getTargetsForItem(item, claudeTargets);
+
+        for (const targetId of targets) {
+          const target = CLAUDE_TARGETS.find(t => t.id === targetId);
+          const destPath = path.join(cwd, agent.folder, target.folder, item.id);
+
+          await fs.remove(destPath);
+          await fs.ensureDir(path.dirname(destPath));
+          await fs.copy(sourcePath, destPath);
+
+          installed.push({
+            type: item.type,
+            id: item.id,
+            name: item.name,
+            agent: agent.name,
+            target: target.name,
+            path: destPath,
+            version: manifest.version
+          });
+        }
+      } else {
+        // For other agents, install to skills folder
+        const destPath = path.join(cwd, agent.folder, 'skills', item.id);
+
+        await fs.remove(destPath);
+        await fs.ensureDir(path.dirname(destPath));
+        await fs.copy(sourcePath, destPath);
+
+        installed.push({
+          type: item.type,
+          id: item.id,
+          name: item.name,
+          agent: agent.name,
+          target: 'skills',
+          path: destPath,
+          version: manifest.version
+        });
+      }
+    }
+  }
+
+  return installed;
+}
+
+function getTargetsForItem(item, claudeTargets) {
+  // Map item type to default target
+  const typeToTarget = {
+    skill: 'skills',
+    subagent: 'subagents',
+    command: 'commands'
+  };
+
+  // If item type has a specific target, use it
+  if (item.type !== 'skill') {
+    return [typeToTarget[item.type]];
+  }
+
+  // For skills, use selected targets
+  return claudeTargets;
+}
+
+async function saveInstalledManifest(cwd, data) {
+  const manifestPath = path.join(cwd, INSTALLED_MANIFEST);
+  let existing = { installations: [] };
+
+  if (await fs.pathExists(manifestPath)) {
+    existing = await fs.readJson(manifestPath);
+  }
+
+  // Update or add installation record
+  const sourceIndex = existing.installations.findIndex(i => i.source === data.source);
+  if (sourceIndex >= 0) {
+    existing.installations[sourceIndex] = data;
+  } else {
+    existing.installations.push(data);
+  }
+
+  await fs.writeJson(manifestPath, existing, { spaces: 2 });
+}
+
+async function updateInstalledSkills() {
+  const cwd = process.cwd();
+  const manifestPath = path.join(cwd, INSTALLED_MANIFEST);
+
+  if (!await fs.pathExists(manifestPath)) {
+    console.log('No installed skills found. Use "add-skill <owner/repo>" to install first.');
+    process.exit(0);
+  }
+
+  const installed = await fs.readJson(manifestPath);
+
+  if (!installed.installations?.length) {
+    console.log('No installations found.');
+    process.exit(0);
+  }
+
+  console.log('\n🔄 Checking for updates...\n');
+
+  for (const installation of installed.installations) {
+    const { owner, repo } = parseRepoArg(installation.source);
+    const ref = installation.ref || 'main';
+
+    console.log(`📦 ${installation.source} (current: v${installation.version})`);
+
+    const tempDir = path.join(os.tmpdir(), `add-skill-update-${Date.now()}`);
+
+    try {
+      await downloadAndExtract(owner, repo, ref, tempDir);
+
+      const extractedFolders = await fs.readdir(tempDir);
+      const repoFolder = extractedFolders[0];
+      const repoPath = path.join(tempDir, repoFolder);
+
+      const manifest = await fs.readJson(path.join(repoPath, 'manifest.json'));
+
+      if (manifest.version === installation.version) {
+        console.log(`   ✓ Already up to date (v${manifest.version})\n`);
+        continue;
+      }
+
+      console.log(`   ↑ Updating to v${manifest.version}...`);
+
+      // Re-install all items from this source
+      for (const item of installation.items) {
+        const allItems = [
+          ...(manifest.skills || []),
+          ...(manifest.subagents || []),
+          ...(manifest.commands || [])
+        ];
+
+        const sourceItem = allItems.find(i => i.id === item.id);
+        if (!sourceItem) {
+          console.log(`   ⚠️  Item "${item.id}" no longer exists in source`);
+          continue;
+        }
+
+        const sourcePath = path.join(repoPath, sourceItem.path);
+        if (await fs.pathExists(sourcePath)) {
+          await fs.remove(item.path);
+          await fs.ensureDir(path.dirname(item.path));
+          await fs.copy(sourcePath, item.path);
+          console.log(`   ✓ Updated ${item.name}`);
+        }
+      }
+
+      // Update version in manifest
+      installation.version = manifest.version;
+      installation.installedAt = new Date().toISOString();
+
+      console.log(`   ✅ Updated to v${manifest.version}\n`);
+
+    } catch (error) {
+      console.error(`   ❌ Failed: ${error.message}\n`);
+    } finally {
+      await fs.remove(tempDir).catch(() => {});
+    }
+  }
+
+  // Save updated manifest
+  await fs.writeJson(manifestPath, installed, { spaces: 2 });
+  console.log('✅ Update complete!\n');
+}
+
+async function listInstalledSkills() {
+  const cwd = process.cwd();
+  const manifestPath = path.join(cwd, INSTALLED_MANIFEST);
+
+  if (!await fs.pathExists(manifestPath)) {
+    console.log('No installed skills found.');
+    process.exit(0);
+  }
+
+  const installed = await fs.readJson(manifestPath);
+
+  if (!installed.installations?.length) {
+    console.log('No installations found.');
+    process.exit(0);
+  }
+
+  console.log('\n📦 Installed Skills\n');
+  console.log('─'.repeat(60));
+
+  for (const installation of installed.installations) {
+    console.log(`\n  Source: ${installation.source}`);
+    console.log(`  Version: v${installation.version}`);
+    console.log(`  Installed: ${new Date(installation.installedAt).toLocaleDateString()}`);
+    console.log(`  Items:`);
+
+    for (const item of installation.items) {
+      const relativePath = path.relative(cwd, item.path);
+      console.log(`    • [${item.type}] ${item.name} → ${relativePath}`);
+    }
+  }
+
+  console.log('\n' + '─'.repeat(60));
+  console.log('\nRun "add-skill --update" to check for updates.\n');
+}
+
+function printSummary(installed, cwd) {
+  console.log('\n✅ Installation Summary\n');
+  console.log('─'.repeat(60));
+
+  // Group by agent
+  const byAgent = {};
+  for (const item of installed) {
+    const key = `${item.agent} (${item.target})`;
+    if (!byAgent[key]) byAgent[key] = [];
+    byAgent[key].push(item);
+  }
+
+  for (const [agent, items] of Object.entries(byAgent)) {
+    console.log(`\n  ${agent}:`);
+    for (const item of items) {
+      const relativePath = path.relative(cwd, item.path);
+      console.log(`    • [${item.type}] ${item.name}`);
+      console.log(`      📁 ${relativePath}`);
+    }
+  }
+
+  console.log('\n' + '─'.repeat(60));
+  console.log(`\n🎉 Installed ${installed.length} item(s) successfully!`);
+  console.log('💡 Run "add-skill --update" to update in the future.\n');
 }
 
 function parseRepoArg(arg) {
