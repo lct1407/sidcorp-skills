@@ -14,7 +14,8 @@
       "Bash(cmd.exe /c \"cd /d d:\\\\Sources\\\\sidcorp-skills\\\\cli && npm install\")",
       "Bash(cmd.exe /c \"cd /d d:\\\\Sources\\\\sidcorp-skills\\\\cli && dir\")",
       "Bash(powershell -Command \"cd d:\\\\Sources\\\\sidcorp-skills\\\\cli; npm install; dir\")",
-      "Bash(git restore:*)"
+      "Bash(git restore:*)",
+      "Bash(npm publish:*)"
     ]
   }
 }

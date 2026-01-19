@@ -1,10 +1,10 @@
 {
   "name": "add-skill",
-  "version": "1.0.0",
-  "description": "CLI to install AI agent skills from GitHub repositories",
+  "version": "1.2.1",
+  "description": "Sid Corp CLI to install AI agent skills from GitHub repositories",
   "main": "index.js",
   "bin": {
-    "add-skill": "./index.js"
+    "sc": "./index.js"
   },
   "keywords": [
     "cli",

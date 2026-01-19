@@ -22,10 +22,28 @@ const CLAUDE_TARGETS = [
 
 const INSTALLED_MANIFEST = '.skill-manifest.json';
 
+// Default skill repositories
+const DEFAULT_REPOS = [
+  { id: 'sidcorp/sidcorp-skills', name: 'Sidcorp Skills', description: 'Official skills collection' }
+];
+
 async function main() {
   const args = process.argv.slice(2);
+  const command = args[0];
 
-  // Handle --update flag
+  // Handle init command
+  if (command === 'init') {
+    await initSkills();
+    return;
+  }
+
+  // Handle upgrade command
+  if (command === 'upgrade') {
+    await upgradeAll();
+    return;
+  }
+
+  // Handle --update flag (legacy, same as upgrade --skills)
   if (args.includes('--update') || args.includes('-u')) {
     await updateInstalledSkills();
     return;
@@ -133,23 +151,194 @@ async function main() {
   }
 }
 
+async function initSkills() {
+  console.log('\n🚀 Add-Skill Initialization\n');
+
+  // Step 1: Ask for repository
+  const repoResponse = await prompts({
+    type: 'select',
+    name: 'repo',
+    message: 'Select skill repository to install from',
+    choices: [
+      ...DEFAULT_REPOS.map(r => ({
+        title: `${r.name} (${r.id})`,
+        description: r.description,
+        value: r.id
+      })),
+      {
+        title: 'Custom repository',
+        description: 'Enter owner/repo manually',
+        value: 'custom'
+      }
+    ]
+  });
+
+  if (!repoResponse.repo) {
+    console.log('Cancelled.');
+    process.exit(0);
+  }
+
+  let repoArg = repoResponse.repo;
+
+  if (repoArg === 'custom') {
+    const customResponse = await prompts({
+      type: 'text',
+      name: 'repo',
+      message: 'Enter repository (owner/repo)',
+      validate: value => value.includes('/') ? true : 'Format: owner/repo'
+    });
+
+    if (!customResponse.repo) {
+      console.log('Cancelled.');
+      process.exit(0);
+    }
+
+    repoArg = customResponse.repo;
+  }
+
+  // Now run normal install flow
+  const { owner, repo } = parseRepoArg(repoArg);
+  const ref = 'main';
+
+  console.log(`\n📦 Fetching ${owner}/${repo}...\n`);
+
+  const tempDir = path.join(os.tmpdir(), `add-skill-${Date.now()}`);
+
+  try {
+    await downloadAndExtract(owner, repo, ref, tempDir);
+
+    const extractedFolders = await fs.readdir(tempDir);
+    const repoFolder = extractedFolders[0];
+    const repoPath = path.join(tempDir, repoFolder);
+
+    const manifestPath = path.join(repoPath, 'manifest.json');
+    if (!await fs.pathExists(manifestPath)) {
+      console.error('manifest.json not found in repository root');
+      process.exit(1);
+    }
+
+    const manifest = await fs.readJson(manifestPath);
+    const cwd = process.cwd();
+
+    const installItems = await selectItemsToInstall(manifest);
+    if (installItems.length === 0) {
+      console.log('Nothing selected. Exiting.');
+      process.exit(0);
+    }
+
+    const selectedAgents = await selectAgents(cwd);
+    if (selectedAgents.length === 0) {
+      console.log('No agents selected. Exiting.');
+      process.exit(0);
+    }
+
+    let claudeTargets = ['skills'];
+    if (selectedAgents.includes('claude')) {
+      claudeTargets = await selectClaudeTargets(installItems);
+    }
+
+    const installed = await installItems_(
+      installItems,
+      selectedAgents,
+      claudeTargets,
+      repoPath,
+      manifest,
+      cwd
+    );
+
+    await saveInstalledManifest(cwd, {
+      source: `${owner}/${repo}`,
+      ref,
+      version: manifest.version,
+      installedAt: new Date().toISOString(),
+      items: installed
+    });
+
+    printSummary(installed, cwd);
+
+  } catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+  } finally {
+    await fs.remove(tempDir).catch(() => {});
+  }
+}
+
+async function upgradeAll() {
+  console.log('\n🔄 Upgrading Add-Skill...\n');
+
+  // Step 1: Check for CLI update
+  console.log('📦 Checking for CLI updates...');
+
+  try {
+    const { execSync } = require('child_process');
+
+    // Get current version
+    const packageJson = require('./package.json');
+    const currentVersion = packageJson.version;
+
+    // Check latest version on npm
+    let latestVersion;
+    try {
+      const npmInfo = execSync('npm view add-skill version', { encoding: 'utf-8' }).trim();
+      latestVersion = npmInfo;
+    } catch (e) {
+      console.log('   ⚠️  Could not check npm for updates\n');
+      latestVersion = currentVersion;
+    }
+
+    if (latestVersion && latestVersion !== currentVersion) {
+      console.log(`   Current: v${currentVersion}`);
+      console.log(`   Latest:  v${latestVersion}`);
+
+      const updateResponse = await prompts({
+        type: 'confirm',
+        name: 'update',
+        message: 'Update CLI to latest version?',
+        initial: true
+      });
+
+      if (updateResponse.update) {
+        console.log('\n   Installing latest version...');
+        try {
+          execSync('npm install -g add-skill@latest', { stdio: 'inherit' });
+          console.log('   ✅ CLI updated successfully!\n');
+        } catch (e) {
+          console.log('   ❌ Failed to update CLI. Try: npm install -g add-skill@latest\n');
+        }
+      }
+    } else {
+      console.log(`   ✓ CLI is up to date (v${currentVersion})\n`);
+    }
+
+  } catch (error) {
+    console.log(`   ⚠️  Could not check CLI version: ${error.message}\n`);
+  }
+
+  // Step 2: Update installed skills
+  console.log('📦 Checking for skill updates...\n');
+  await updateInstalledSkills();
+}
+
 function printUsage() {
   console.log(`
-Usage: add-skill <owner/repo> [options]
+Usage: sc <command> [options]
 
 Commands:
-  add-skill <owner/repo>     Install skills from GitHub repository
-  add-skill --update, -u     Update all installed skills to latest version
-  add-skill --list, -l       List installed skills
+  sc init                    Initialize and install skills (interactive)
+  sc upgrade                 Update CLI and all installed skills
+  sc <owner/repo>            Install skills from GitHub repository
+  sc --list, -l              List installed skills
 
 Options:
   --ref <branch|tag>         Use specific branch or tag (default: main)
 
 Examples:
-  add-skill sidcorp/sidcorp-skills
-  add-skill sidcorp/sidcorp-skills --ref develop
-  add-skill --update
-  add-skill --list
+  sc init
+  sc upgrade
+  sc sidcorp/sidcorp-skills
+  sc sidcorp/sidcorp-skills --ref develop
+  sc --list
 `);
 }
 
